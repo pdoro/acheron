@@ -1,3 +1,5 @@
+package com.pdomingo;
+
 import com.pdomingo.client.Client;
 
 /**

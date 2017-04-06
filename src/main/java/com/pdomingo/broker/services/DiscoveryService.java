@@ -1,5 +1,7 @@
 package com.pdomingo.broker.services;
 
+import com.pdomingo.broker.Broker;
+import org.zeromq.ZFrame;
 import org.zeromq.ZMsg;
 
 /**
@@ -7,7 +9,7 @@ import org.zeromq.ZMsg;
  */
 public class DiscoveryService implements Service {
     @Override
-    public void handle(ZMsg payload) {
+    public void handle(ZFrame requester, ZMsg payload, Broker brokerContext) {
 
     }
 }

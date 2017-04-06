@@ -33,11 +33,13 @@ public enum CMD {
     }
 
     public ZFrame newFrame () {
-        return new ZFrame(data);
+        return new ZFrame(this.name());
+        //return new ZFrame(data);
     }
 
     public boolean frameEquals (ZFrame frame) {
-        return Arrays.equals(data, frame.getData());
+        return Arrays.equals(name().getBytes(), frame.getData());
+        //return Arrays.equals(data, frame.getData());
     }
 
     public static CMD resolveCommand(ZFrame frame) {

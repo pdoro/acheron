@@ -2,8 +2,8 @@ package com.pdomingo.worker;
 
 import com.pdomingo.zmq.CMD;
 import com.pdomingo.zmq.Heartbeat;
+import com.pdomingo.zmq.ZHelper;
 import org.zeromq.*;
-
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -12,11 +12,12 @@ public class Worker {
     /*--------------------------- Attributes ---------------------------*/
 
     private ZContext ctx;
-    private ZMQ.Socket worker;
+    private ZMQ.Socket socket;
     private ZPoller poller;
 
     private String endpoint;
-    private String service;
+    private String service = "normalize";
+    private final String address;
 
     private Heartbeat heart; // broker's heart
 
@@ -24,94 +25,113 @@ public class Worker {
 
 	/*--------------------------- Constructor ---------------------------*/
 
-    public Worker() {
+    public Worker(String endpoint, int n) {
+        this.endpoint = endpoint;
+        this.address = "WORKER0" + n;
         ctx = new ZContext();
-        poller = new ZPoller(ctx.createSelector());
-        poller.register(worker, ZPoller.IN);
+        heart = new Heartbeat();
+
+        log.info("[{}] Worker started", address);
+        reconnectToEndpoint();
+
+        while(true) {
+            receive();
+        }
     }
 
 	/*--------------------------- Private methods ---------------------------*/
 
     private void reconnectToEndpoint() {
 
-        log.trace("Attempting to reconnect broker");
+        log.info("[{}] Attempting to reconnect broker", address);
 
-        if (worker != null) {
-            ctx.destroySocket(worker);
-            log.trace("Destroyed previous socket");
+        if (socket != null) {
+            ctx.destroySocket(socket);
+            log.warn("[{}] Destroyed previous socket", address);
         }
 
-        worker = ctx.createSocket(ZMQ.DEALER);
-        worker.connect(endpoint);
+        socket = ctx.createSocket(ZMQ.DEALER);
+        socket.setIdentity(address.getBytes());
+        socket.connect(endpoint);
 
-        log.trace("Successful connection to broker at {}", endpoint);
+        poller = new ZPoller(ctx.createSelector());
+        poller.register(socket, ZPoller.IN);
+
+
+        log.info("[{}] Successful connection to broker at {}", address, endpoint);
 
         // Register service with broker
         sendToBroker(CMD.READY, service, null);
 
-        heart.beat();
+        heart.reset();
     }
 
     private void sendToBroker(CMD command, String option, ZMsg msg) {
 
+        log.trace("[{}] Send CMD:'{}' option='{}'", address, command, option);
+
         msg = msg != null ? msg.duplicate() : new ZMsg();
+
+        msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
 
         // Stack protocol envelope to start of message
         if (option != null)
-            msg.addFirst(new ZFrame(option));
+            msg.add(new ZFrame(option));
 
-        msg.addFirst(command.newFrame());
-        msg.addFirst(CMD.WORKER.newFrame());
-        msg.addFirst(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
+        msg.add(CMD.WORKER.newFrame());
+        msg.add(command.newFrame());
 
-        if (verbose) {
-            System.out.println("Sending" + command + "to broker");
-            msg.dump();
-        }
+        if(log.isTraceEnabled())
+            log.trace("[{}] Sending READY command to broker {}", address, ZHelper.dump(msg));
 
-        msg.send(worker);
+        msg.send(socket);
     }
 
     public ZMsg receive() {
 
         while (!Thread.currentThread().isInterrupted()) {
 
-            if (poller.poll(Heartbeat.TIMEOUT) == -1)
+            log.debug("[{}] Poll started", address);
+            if (poller.poll(Heartbeat.TIMEOUT) == -1) {
+                log.error("[{}] Heartbeat interrupted prematurely", address);
                 break; // Interrupted
+            }
 
-            if (poller.isReadable(worker)) {
+            if (poller.isReadable(socket)) {
 
-                ZMsg msg = ZMsg.recvMsg(worker);
-                if (msg == null)
+                ZMsg msg = ZMsg.recvMsg(socket);
+
+                if(log.isTraceEnabled())
+                    log.trace("[{}] Message received from broker {}", address, ZHelper.dump(msg));
+
+                if (msg == null) {
+                    log.error("[{}] Message receive interrupted prematurely", address);
                     break;
-
-                if (verbose) {
-                    System.out.println("Received message from broker: \n");
-                    msg.dump();
                 }
 
                 heart.beat(); // use received message as a signal of alive endpoint
 
                 // Don't try to handle errors, just assert noisily
-                assert (msg.size() >= 3);
+                assert (msg.size() >= 3); // TODO modificar por log y continue
 
                 ZFrame empty = msg.pop();
-                assert (empty.getData().length == 0);
+                assert (empty.getData().length == 0); // TODO modificar por log y continue
                 empty.destroy();
 
                 CMD command = CMD.resolveCommand(msg.pop());
                 processCommand(command, empty);
 
             } else { // heartbeat passed but we received no request
+                log.warn("[{}] Heartbeat failed", address);
                 heart.fail();
 
                 if (heart.seemsDead()) {
 
-                    log.trace("Endpoint seems dead. Waiting {} msecs until reconnection", heart.getReconnectDelay());
+                    log.warn("[{}] Endpoint seems dead. Waiting {} msecs until reconnection", address, heart.getReconnectDelay());
                     heart.reconnectDelay();
 
                     if (heart.isDead()) {
-                        log.trace("Endpoint declared dead, destroying worker");
+                        log.error("[{}] Endpoint declared dead, destroying socket", address);
                         destroyWorker();
                     }
                     else
@@ -119,42 +139,41 @@ public class Worker {
                 }
             }
 
-            if (heart.timeBeat())
-                heart.sendHeartbeat(worker);
+            if (heart.timeToBeat())
+                heart.sendHeartbeat().send(socket);
         }
+
         return null;
     }
 
-    public void destroyWorker() {
-
+    private void destroyWorker() {
+        ctx.destroySocket(socket);
+        ctx.destroy();
+        log.info("[{}] Worker destroyed", address);
     }
 
-    public void processCommand(CMD command, ZFrame payload) {
+    private void processCommand(CMD command, ZFrame payload) {
 
         switch (command) {
 
             case REQUEST:
+                log.trace("[{}] - {}", command, payload.toString());
                 // process request
                 break;
 
             case HEARTBEAT:
+                log.info("[{}] Received heartbeat from endpoint", address);
                 // Good to know!
                 // The message received was considered a beat
                 break;
 
             case DISCONNECT:
-                log.warn("Received disconnect command");
+                log.warn("[{}] Received disconnect command", address);
                 reconnectToEndpoint();
                 break;
 
-            case READY:
-            case CLIENT:
-            case WORKER:
-            case REPLY:
-                log.warn("Invalid command {}", command.name());
-                break;
-
             default:
+                log.warn("[{}] Invalid command {}", address, command.name());
         }
     }
 }

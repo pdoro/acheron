@@ -37,6 +37,19 @@ public class ZHelper {
         }
     }
 
+    public static String dump(ZMsg msg) {
+        if (msg == null)
+            return "Null message";
+
+        int idx = 0;
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n[----------------- MESSAGE DUMP -----------------]\n");
+        for (ZFrame frame : msg)
+            sb.append(String.format("[Frame %02d - %03d bytes] %s\n", idx++, frame.size(), frame.toString()));
+        sb.append("[------------------------------------------------]");
+        return sb.toString();
+    }
+
     public static ZMsg frames(ZFrame frame, String... strings) {
         ZMsg msg = new ZMsg();
         for (String str : strings)

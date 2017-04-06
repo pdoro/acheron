@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Log4j2 monitoriza cambios en el fichero cada 30 sec reconfigurandos si detecta -->
+
+<Configuration status="error" name="logConfig" monitorInterval="30">
+
+    <Properties>
+        <!-- Relative path for the logs -->
+        <Property name="logDir">logs</Property>
+
+        <!-- Maximun size for the rolling files -->
+        <Property name="logSizeLimit">250 MB</Property>
+
+        <Property name="logFile">$${date:yyyy-MM-dd}-Acheron</Property>
+
+        <Property name="infoPattern">%date [%t] %-5level %c{1.} - %msg%n</Property>
+
+        <Property name="logHeader">
+            [System Information]%nRuntime:
+            ${java:runtime}%nJVM: ${java:vm}%nOS: ${java:os}%nLocale:
+            ${java:locale}%nHardware: ${java:hw}%n
+        </Property>
+        <Property name="logSeparator">
+            =====================================================================================================================================%n
+        </Property>
+
+        <Property name="maxRollover">20</Property>
+    </Properties>
+
+    <Appenders>
+
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${infoPattern}" />
+        </Console>
+
+        <RollingRandomAccessFile name="FileLog"
+                                 fileName="${logDir}/${logFile}.log"
+                                 filePattern="${logDir}/$${date:yyyy-MM}/%date{yyyy-MM-dd}--%i.log.gz"
+                                 immediateFlush="false">
+            <PatternLayout pattern="${infoPattern}" header="${logHeader}${logSeparator}"
+                           footer="${logSeparator}" />
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" />
+                <SizeBasedTriggeringPolicy size="${logSizeLimit}" />
+            </Policies>
+            <DefaultRolloverStrategy max="${maxRollover}">
+                <Delete basePath="${logDir}" maxDepth="2">
+                    <IfFileName glob="*/*.log.gz" />
+                    <IfLastModified age="60d" />
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingRandomAccessFile>
+
+        <Async name="AsyncFileLog">
+            <AppenderRef ref="FileLog" />
+        </Async>
+
+        <Async name="AsyncConsole">
+            <AppenderRef ref="Console" />
+        </Async>
+    </Appenders>
+
+    <Loggers>
+        <!-- External events such as library logs -->
+        <Root level="info">
+            <!-- <AppenderRef ref="AsyncFileLog" /> -->
+            <AppenderRef ref="AsyncConsole" />
+        </Root>
+        <!-- Dual log from  package events -->
+        <Logger name="com.pdomingo" level="trace" additivity="false">
+            <AppenderRef ref="AsyncConsole" />
+            <AppenderRef ref="AsyncFileLog"/>
+        </Logger>
+    </Loggers>
+</Configuration>
