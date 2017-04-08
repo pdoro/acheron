@@ -13,7 +13,8 @@
 
         <Property name="logFile">$${date:yyyy-MM-dd}-Acheron</Property>
 
-        <Property name="infoPattern">%date [%t] %-5level %c{1.} - %msg%n</Property>
+        <Property name="infoPattern">%date [%r] %-5level %c{1.} - %msg%n</Property>
+        <!-- %t para tiempo, %r msecs desde inicio exec -->
 
         <Property name="logHeader">
             [System Information]%nRuntime:
@@ -67,9 +68,8 @@
             <AppenderRef ref="AsyncConsole" />
         </Root>
         <!-- Dual log from  package events -->
-        <Logger name="com.pdomingo" level="trace" additivity="false">
+        <Logger name="com.pdomingo" level="info" additivity="false">
             <AppenderRef ref="AsyncConsole" />
-            <AppenderRef ref="AsyncFileLog"/>
         </Logger>
     </Loggers>
 </Configuration>

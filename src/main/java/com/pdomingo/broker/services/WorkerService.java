@@ -6,7 +6,7 @@ import org.zeromq.ZMsg;
 import java.util.Queue;
 
 import com.pdomingo.broker.Broker;
-import com.pdomingo.broker.Broker.Worker;
+import com.pdomingo.broker.Broker.VWorker;
 import com.pdomingo.zmq.CMD;
 import com.pdomingo.zmq.ZHelper;
 import lombok.extern.slf4j.Slf4j;
@@ -24,8 +24,8 @@ import java.util.*;
 public class WorkerService implements Service {
 
     private final String serviceName;
-    private Queue<Worker> availableWorkers;
-    private Map<String, Worker> workerSet;
+    private Queue<VWorker> availableWorkers;
+    private Map<String, VWorker> workerSet;
 
     public WorkerService(String serviceName) {
         this.serviceName = serviceName;
@@ -61,11 +61,11 @@ public class WorkerService implements Service {
 
             if(availableWorkers.isEmpty()) {
                 // No hay workers disponibles
-                // En un futuro, mandar la peticiÃ³n a otro broker que tenga
+                // En un futuro, mandar la peticiÃƒÂ³n a otro broker que tenga
                 // workers disponibles para trabajar
-                // Â¿Y si el broker no dispone de ese servicio?
+                // Ã‚Â¿Y si el broker no dispone de ese servicio?
             } else {
-                Worker freeWorker = availableWorkers.poll();
+                VWorker freeWorker = availableWorkers.poll();
                 ZMsg msg = freeWorker.buildRequest(sender, payload);
                 brokerContext.send(msg);
             }
@@ -89,7 +89,7 @@ public class WorkerService implements Service {
 
         CMD command = CMD.resolveCommand(msg.pop());
         String address = sender.toString();
-        Broker.Worker worker = workerSet.get(address);
+        VWorker worker = workerSet.get(address);
 
         log.trace("{} - from {}", command, address);
 
@@ -97,15 +97,14 @@ public class WorkerService implements Service {
 
             case READY:
                 // Add Worker to list of available workers
-                worker = new Broker.Worker(address);
+                worker = new VWorker(address);
                 availableWorkers.add(worker);
                 workerSet.put(address, worker);
                 brokerContext.registerWorker(address, worker);
-                // Idea añadir un payload con la latencia del mensaja
+                // Idea aÃ±adir un payload con la latencia del mensaje
                 break;
 
             case HEARTBEAT:
-                worker.heart.beat();
                 break;
 
             case REPLY:
@@ -128,5 +127,7 @@ public class WorkerService implements Service {
             default:
                 log.error("Invalid command : {}" + command);
         }
+
+        worker.heart.beatFromEndpoint();
     }
 }

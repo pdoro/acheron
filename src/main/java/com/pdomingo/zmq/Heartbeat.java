@@ -5,47 +5,110 @@ import org.zeromq.ZMQ;
 import org.zeromq.ZFrame;
 import org.zeromq.ZMsg;
 
+import java.util.Date;
+
 /**
  *
  */
 @Slf4j
 public class Heartbeat {
 
-    public final static int LIVENESS = 3;
-    public final static int TIMEOUT = 2500;    // in msecs
-    public final static int MAX_RECONNECT_DELAY = 32000; // in msecs
-    public final static int HEARTBEAT_INTERVAL = 2400;    // in msecs
+    public static long now() {
+        return System.currentTimeMillis();
+    }
+
+    public Heartbeat() {
+        this(HEARTBEAT_INTERVAL);
+    }
+    public Heartbeat(long heartbeat_interval) {
+        this.heartbeat_interval = heartbeat_interval;
+        this.liveness = MAX_LIVENESS;
+        this.dead = false;
+        this.lastHeartbeatRecv = now();
+        this.nextHeartbeatAt = now();
+    }
+
+    /////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////// TRACK HEARTBEATS FROM SELF TO REMOTE ENDPOINT /////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////////
+
+    // Msec when the local endpoint should heartbeat the remote one
+    private long nextHeartbeatAt;
+    private final long heartbeat_interval;
+
+    public boolean isTimeToBeat() {
+        return now() >= nextHeartbeatAt && !dead;
+    }
+
+    public long remainingTimeToBeat() {
+        long now = now();
+        long diff = nextHeartbeatAt - now;
+        return diff > 0 ? diff : 0; // Avoid negative diff so poll doesn't wait infinitely
+    }
+
+    public ZMsg beatToEndpoint(String address) {
+        ZMsg msg = new ZMsg();
+        msg.add(address);
+        msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
+        msg.add(CMD.HEARTBEAT.newFrame());
+        updateSelfBeat();
+        return msg;
+    }
+
+    public ZMsg beatToEndpoint() {
+        ZMsg beat = new ZMsg();
+        beat.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
+        beat.add("normalize");
+        beat.add(CMD.WORKER.newFrame());
+        beat.add(CMD.HEARTBEAT.newFrame());
+        updateSelfBeat();
+        return beat;
+    }
+
+    public void updateSelfBeat() {
+        nextHeartbeatAt = now() + heartbeat_interval;
+        log.trace("updateSelfBeat - Next HB expected at {}", new Date(nextHeartbeatAt));
+    }
+
+    /////////////////////////////////////////////////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////////
+
+    /////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////// TRACK HEARTBEATS FROM REMOTE ENDPOINT TO SELF /////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////////
+
+    public static final int MAX_LIVENESS = 3;
+    public static final int MAX_RECONNECT_DELAY = 32000; // in msecs
+    public static final int HEARTBEAT_INTERVAL = 5000;   // in msecs
 
     private int         liveness; // remaining attempts to decide if other end is dead
     private long  reconnectDelay = 1000; // in msecs
     private boolean         dead;
 
-    private long lastHeartbeatSent;
     private long lastHeartbeatRecv;
 
     /**
      * Represent a positive heartbeat from the other end
      */
-    public void beat() {
-        liveness = LIVENESS; // reset remaining attempts
+    public void beatFromEndpoint() {
+        liveness = MAX_LIVENESS; // reset remaining attempts
         lastHeartbeatRecv = now();
+    }
+
+    public boolean remoteHeartbeatExpired() {
+        return now() > lastHeartbeatRecv + heartbeat_interval;
     }
 
     /**
      * Represent a failed heartbeat from the other end
      */
-    public void fail() {
+    public void failFromEndpoint() {
         if(isAlive())
             liveness -= 1;
     }
 
-    public void reset() {
-        liveness = LIVENESS; // reset remaining attempts
-        lastHeartbeatRecv = System.currentTimeMillis();
-    }
-
     public boolean seemsDead() {
-        return liveness == 0;
+        return liveness <= 0;
     }
 
     /**
@@ -73,49 +136,13 @@ public class Heartbeat {
         try {
             Thread.sleep(reconnectDelay); // give time for the endpoint to resurrect
             reconnectDelay *= 2;           // exponential backoff
+            liveness = MAX_LIVENESS;      // restart liveness counter
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
     }
 
-    public boolean timeToBeat() {
-        long now = now();
-        if((now - lastHeartbeatSent) > HEARTBEAT_INTERVAL && !dead) {
-            lastHeartbeatSent = now;
-            return true;
-        }
-        return false;
-    }
-
-    public ZMsg sendHeartbeat(String address) {
-        ZMsg msg = new ZMsg();
-        msg.add(address);
-        msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
-        msg.add(CMD.HEARTBEAT.newFrame());
-        lastHeartbeatSent = now();
-        return msg;
-    }
-
-    public ZMsg sendHeartbeat() {
-        ZMsg beat = new ZMsg();
-        beat.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
-        beat.add("normalize");
-        beat.add(CMD.WORKER.newFrame());
-        beat.add(CMD.HEARTBEAT.newFrame());
-        lastHeartbeatSent = now();
-        return beat;
-    }
-
-
     public long getReconnectDelay() {
         return reconnectDelay;
-    }
-
-    public boolean heartbeatExpired() {
-        return now() > lastHeartbeatRecv;
-    }
-
-    private long now() {
-        return System.currentTimeMillis();
     }
 }

@@ -8,6 +8,6 @@ import com.pdomingo.worker.Worker;
 public class WorkerMain {
 
     public static void main(String[] args) {
-        new Worker("tcp://localhost:5555", 2);
+        new Worker("tcp://localhost:5555", 1);
     }
 }
