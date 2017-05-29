@@ -1,13 +1,43 @@
 package com.pdomingo.client;
 
-import com.esotericsoftware.kryo.Serializer;
+import com.google.common.base.Charsets;
+import com.pdomingo.pipeline.transform.BiTransformer;
 import com.pdomingo.zmq.CMD;
 import com.pdomingo.zmq.ZHelper;
 import lombok.extern.slf4j.Slf4j;
-import org.zeromq.*;
+import org.zeromq.ZContext;
+import org.zeromq.ZMQ;
+import org.zeromq.ZMsg;
+import org.zeromq.ZPoller;
 
 import java.io.Closeable;
+import java.util.Collection;
 
+/**
+ * Pieza del servicio distribuido que actua como cliente del servicio.
+ * Para ello se conecta con un nodo {@link com.pdomingo.broker.Broker} y
+ * manda mensajes de tipo {@link BatchRequest}.
+ *
+ * Almacena mensajes en lotes para despues escribirlos de golpe y la vuelta
+ * llama al metodo de callback proporcionado como {@link #asyncHandler}
+ *
+ * Los parametros de configuración del cliente son los siguientes:
+ * <ul>
+ *     <li>Async: define si se trata de un cliente sincrono (escribe
+ *     mensaje y no se desbloquea hasta recibir una respuesa) o asincrono
+ *     (puede escribir y esperar respuestas en el orden que quiera y tantas
+ *     veces como desee)</li>
+ *     <li>Batch size: tamaÃ±o de los lotes, define cuantos objetos contiene
+ *     cada lote</li>
+ *     <li>Write Burst: numero de lotes a escribir de golpe</li>
+ *     <li>Timeout: tiempo de gracia que se da desde que un mensaje se envia
+ *     hasta que se espera recibir su respuesta</li>
+ *     <li>Retries: numero de reintentos en caso de que falle la respuesta de
+ *     un mensaje</li>
+ * </ul>
+ *
+ * @param <T>
+ */
 @Slf4j
 public class Client<T> implements Closeable {
 
@@ -18,18 +48,25 @@ public class Client<T> implements Closeable {
     private ZPoller poller;
 
     // Timeout until request retry
-    private int timeout = 2500; // msecs
+    private final int timeout; // msecs
     // Max number of request until the client gives up
-    private int retries = 3;
-    // Type communication between client and service
+    private int retries;
+    // Type of communication between client and service
     private final boolean async;
     // Number of messages per batch. Non applicable for sync
-    private int batchSize;
+    private final int batchSize;
+    // Messages to write until we await for responses
+    private final int writeBurst;
 
+    private final String address;
     private final String endpoint;
-    private String requestedService;
-    private final Serializer<T> serializer;
-    private final ResponseHandler<T> asynHandler;
+    private String requestedService = "normalize";
+    private final BiTransformer<T, byte[]> serializer;
+    private final ResponseHandler<T> asyncHandler;
+
+    private int writtenRequests;
+    private BatchRequest<T> currentBatch;
+    private ReorderBuffer<T> reorderBuffer;
 
     /*--------------------------- Constructor ---------------------------*/
 
@@ -39,13 +76,20 @@ public class Client<T> implements Closeable {
 
         endpoint = builder.endpoint;
         async = builder.async;
-        batchSize = async ? 1 : builder.batchSize;
+        batchSize = async ? builder.batchSize : 1;
+        writeBurst = async ? builder.writeBurst : 1;
         timeout = builder.timeout;
         retries = builder.retries;
         serializer = builder.serializer;
-        asynHandler = builder.handler;
+        asyncHandler = builder.handler;
+        address = "Client01";//ZHelper.randomId();
+
+        currentBatch = new BatchRequest<>(1, batchSize);
+        reorderBuffer = new ReorderBuffer<>(writeBurst);
 
         reconnectToEndpoint();
+
+        log.debug("Client started");
     }
 
     /*--------------------------- Private methods ---------------------------*/
@@ -53,60 +97,111 @@ public class Client<T> implements Closeable {
     private void reconnectToEndpoint() {
         log.trace("Attempting to reconnect broker");
 
-        if(socket != null) {
+        if (socket != null) {
             ctx.destroySocket(socket);
             log.trace("Destroyed previous socket");
         }
 
-        int socketType = async ? ZMQ.DEALER : ZMQ.REQ;
+        int socketType = ZMQ.DEALER;
         socket = ctx.createSocket(socketType);
+        socket.setIdentity(address.getBytes(Charsets.UTF_8));
         socket.connect(endpoint);
 
-        log.trace("Successful connection to broker at {}", endpoint);
+        poller = new ZPoller(ctx.createSelector());
+        poller.register(socket, ZPoller.IN);
+
+        log.trace("Connection to broker at {}", endpoint);
     }
 
-    public void send(String payload) {
+    public void send(T payload) {
 
-        ZMsg msg = buildRequest(payload, requestedService);
+        writeRequest(payload);
+        if (writtenRequests % writeBurst == 0)
+            gatherResponses();
+    }
 
-        while(retries > 0) {
+    private void gatherResponses() {
 
-            // Duplicate in case there's no response
-            // so the original data is not lost
-            msg.duplicate().send(socket);
+        log.debug("Starting response gathering");
 
-            if(poller.poll(timeout) == -1)
+        long timeout = 100;
+
+        // Dont stop gathering responses until we received ALL!
+        while (reorderBuffer.hasPendingRequests()) {
+
+            if (poller.poll(timeout) == -1)
                 break; // Interrupted
 
-            if(poller.writable(socket)) {
+            if (poller.isReadable(socket)) {
 
-                ZHelper.dump(socket);
-                //ZMsg response = ZMsg.recvMsg(socket);
+                ZMsg response = ZMsg.recvMsg(socket);
+                log.trace("[{}] Received message from broker {}", address, ZHelper.dump(response, log.isTraceEnabled()));
+
+                response.pop(); // EMPTY SEPARATOR
+
+                BatchRequest<T> batchResponse = BatchRequest.fromMsg(serializer, response);
+
+                reorderBuffer.completed(batchResponse);
+                Iterable<BatchRequest<T>> okReq = reorderBuffer.gatherCompletedInOrder();
+                for (BatchRequest<T> breq : okReq) {
+                    for(T data : breq)
+                        asyncHandler.handle(data);
+                }
 
             } else {
-                poller.unregister(socket);
-                if(--retries == 0) {
-                    log.error("Retry limit reached");
-                    break;
+
+                Collection<BatchRequest<T>> pendingRequests = reorderBuffer.getPendingRequests();
+                log.debug("Pending requests : {}", pendingRequests.size());
+                for (BatchRequest timeoutReq : pendingRequests) {
+                    if (timeoutReq.getRetries() < 1000) { // Cambiar a 0
+                        timeoutReq.failRequest();
+                        timeoutReq.toMsg(serializer, CMD.CLIENT, CMD.REQUEST, requestedService, null).send(socket);
+                    } else
+                        log.error("Batch Request {} failed {} times", timeoutReq.batchNo, retries);
                 }
-                reconnectToEndpoint();
             }
         }
 
-        retries = 3;
+        log.debug("Finished response gathering");
     }
 
-    private static final ZMsg buildRequest(String payload, String service) {
-        ZMsg msg = new ZMsg();
-        msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR)); // Frame 0 - empty (REQ compatibility) //
-        msg.add(CMD.CLIENT.newFrame());             // Frame 1 - MDP Command               //
-        msg.add(service);                           // Frame 2 - Service request           //
-        msg.add(payload);                           // Frame 3 - Request payload           //
-        return msg;
+    private void writeRequest(T payload) {
+        currentBatch.addReq(payload);
+
+        if (currentBatch.isReady()) {
+            ZMsg msg = currentBatch.toMsg(serializer, CMD.CLIENT, CMD.REQUEST, requestedService, null);
+            log.trace("[{}] Sending message {}", address, ZHelper.dump(msg, log.isTraceEnabled()));
+            msg.send(socket); // Send the batch message
+
+            reorderBuffer.pending(currentBatch);
+            writtenRequests += 1;
+            currentBatch = new BatchRequest<>(currentBatch.batchNo + 1, batchSize);
+        }
     }
+
+    /**
+     * Con los parametros por defecto, no se recuperaran respuestas hasta
+     * que se hayan mandado 25 lotes * 2000 lotes/rafaga = 5000 registros
+     * <p>
+     * Si se construye un cliente con estos parÃ¡metros y sÃ³lo se 'envÃ­an'
+     * 3000 registros, el cliente se quedarÃ¡ esperando los 2000 registros
+     * faltantes.
+     * <p>
+     * Este mÃ©todo permite forzar el envÃ­o y posterior recepciÃ³n de esas X
+     * peticiones cuando X es menor que la cantidad de mensajes esperados
+     */
+    public void flush() {
+        log.info("Flush invoked");
+        currentBatch.forceReady();
+        writeRequest(null); // currentBatch.addReq discards null payloads
+        gatherResponses();
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
 
     @Override
     public void close() {
+        flush();
         ctx.destroySocket(socket);
         ctx.destroy();
         log.info("Client destroyed");
@@ -120,20 +215,23 @@ public class Client<T> implements Closeable {
 
         private String endpoint;
         private boolean async = true;
-        private int batchSize = 10000;
+        private int batchSize = 25; // req per message
+        private int writeBurst = 5000; // messages until readFrom wait
         private int timeout = 2500; // msecs
         private int retries = 3;
-        private Serializer<T> serializer;
+        private BiTransformer<T, byte[]> serializer;
         private ResponseHandler<T> handler;
 
-        public static <T> Builder<T> start() { return new Builder<>(); }
+        public static <T> Builder<T> start() {
+            return new Builder<>();
+        }
 
         public Builder<T> connectTo(String endpoint) {
             this.endpoint = endpoint;
             return this;
         }
 
-        public Builder<T> serializeUsing(Serializer<T> serializer) {
+        public Builder<T> serializeUsing(BiTransformer<T, byte[]> serializer) {
             this.serializer = serializer;
             return this;
         }
@@ -145,6 +243,11 @@ public class Client<T> implements Closeable {
 
         public Builder<T> batchSize(int batchSize) {
             this.batchSize = batchSize;
+            return this;
+        }
+
+        public Builder<T> writeBurst(int writeBurst) {
+            this.writeBurst = writeBurst;
             return this;
         }
 

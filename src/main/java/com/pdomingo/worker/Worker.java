@@ -1,13 +1,18 @@
 package com.pdomingo.worker;
 
+import com.pdomingo.client.BatchRequest;
+import com.pdomingo.pipeline.transform.BiTransformer;
 import com.pdomingo.zmq.CMD;
 import com.pdomingo.zmq.Heartbeat;
 import com.pdomingo.zmq.ZHelper;
+import org.zeromq.ZFrame;
 import org.zeromq.*;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.function.Function;
+
 @Slf4j
-public class Worker {
+public class Worker<T> {
 
     /*--------------------------- Attributes ---------------------------*/
 
@@ -16,25 +21,26 @@ public class Worker {
     private ZPoller poller;
 
     private String endpoint;
-    private String service = "normalize";
+    private final String service = "normalize";
     private final String address;
 
     private Heartbeat heart; // broker's heartbeat communication
+    private boolean continueRunning;
+
+    private int replyNo = 0;
+    private final BiTransformer<T, byte[]> serializer;
+    private final Function<T,T> processor;
 
 	/*--------------------------- Constructor ---------------------------*/
 
-    public Worker(String endpoint, int n) {
+    public Worker(String endpoint, BiTransformer<T, byte[]> serializer, Function<T, T> processor) {
         this.endpoint = endpoint;
-        this.address = "Worker0" + n;
-        ctx = new ZContext();
-        heart = new Heartbeat();
-
-        log.info("[{}] Worker started", address);
-        reconnectToEndpoint();
-
-        while (true) {
-            receive();
-        }
+        this.address = ZHelper.randomId();
+        this.ctx = new ZContext();
+        this.heart = new Heartbeat();
+        this.serializer = serializer;
+        this.processor = processor;
+        this.continueRunning = true;
     }
 
 	/*--------------------------- Private methods ---------------------------*/
@@ -55,38 +61,52 @@ public class Worker {
         poller = new ZPoller(ctx.createSelector());
         poller.register(socket, ZPoller.IN);
 
-        log.info("[{}] Successful connection to broker at {}", address, endpoint);
+        log.info("[{}] Connection to broker at {}", address, endpoint);
 
         // Register service with broker
-        sendToBroker(CMD.READY, service, null);
+        sendToBroker(CMD.READY, service);
     }
 
-    private void sendToBroker(CMD command, String option, ZMsg msg) {
+    private void sendToBroker(CMD command, String service, String... payload) {
 
-        log.trace("[{}] Send CMD:'{}' option='{}'", address, command, option);
+        log.trace("[{}] Send CMD:'{}' option='{}'", address, command, service);
 
-        msg = msg != null ? msg.duplicate() : new ZMsg();
+        ZMsg msg = new ZMsg();
 
-        msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
-
-        // Stack protocol envelope to start of message
-        if (option != null)
-            msg.add(new ZFrame(option));
-
+        msg.add(ZMQ.MESSAGE_SEPARATOR);
+        msg.add(service);
         msg.add(CMD.WORKER.newFrame());
         msg.add(command.newFrame());
 
-        if (log.isTraceEnabled())
-            log.trace("[{}] Sending READY command to broker {}", address, ZHelper.dump(msg));
+        for(String payloadPart : payload)
+            msg.add(payloadPart);
+
+        log.trace("[{}] Sending READY command to broker {}", address, ZHelper.dump(msg, log.isTraceEnabled()));
 
         msg.send(socket);
     }
 
-    public ZMsg receive() {
+    private void sendToBroker(CMD command, String service, ZMsg payload) {
+        log.trace("[{}] Send CMD:'{}' option='{}'", address, command, service);
 
-        while (!Thread.currentThread().isInterrupted()) {
+        ZMsg msg = new ZMsg();
 
-            log.debug("[{}] Poll started - Timeout: {}", address, Heartbeat.HEARTBEAT_INTERVAL);
+        msg.add(ZMQ.MESSAGE_SEPARATOR);
+        msg.add(service);
+        msg.add(CMD.WORKER.newFrame());
+        msg.add(command.newFrame());
+        msg.addAll(payload);
+
+        log.trace("[{}] Sending {} command to broker {}", address, command, ZHelper.dump(msg, log.isTraceEnabled()));
+
+        msg.send(socket);
+    }
+
+    public void receiveIndefinitely() {
+
+        while (!Thread.currentThread().isInterrupted() && continueRunning) {
+
+            log.debug("[{}] Poll started - Timeout {}", address, Heartbeat.HEARTBEAT_INTERVAL);
             if (poller.poll(heart.remainingTimeToBeat()) == -1) {
                 log.error("[{}] Heartbeat interrupted prematurely", address);
                 break; // Interrupted
@@ -120,11 +140,13 @@ public class Worker {
 
             if (heart.isTimeToBeat()) {
                 heart.beatToEndpoint().send(socket);
-                log.info("[{}] ❤ Sent heartbeat to endpoint {}", address, endpoint);
+                log.debug("[{}] Sent heartbeat to endpoint {}", address, endpoint);
             }
         }
 
-        return null;
+        log.info("Worker finishing...");
+        destroyWorker();
+        log.info("Worker successsfully terminated");
     }
 
     private void handleIncomingMessage(ZMsg msg) {
@@ -134,20 +156,18 @@ public class Worker {
             return;
         }
 
-        if (log.isTraceEnabled())
-            log.trace("[{}] Message received from broker {}", address, ZHelper.dump(msg));
+        log.trace("[{}] Message received from broker {}", address, ZHelper.dump(msg, log.isTraceEnabled()));
 
         heart.beatFromEndpoint(); // use received message as a signal of alive endpoint
 
         // Don't try to handle errors, just assert noisily
         assert (msg.size() >= 3); // TODO modificar por log y continue
-
         ZFrame empty = msg.pop();
         assert (empty.getData().length == 0); // TODO modificar por log y continue
         empty.destroy();
 
         CMD command = CMD.resolveCommand(msg.pop());
-        processCommand(command, empty);
+        processCommand(command, msg);
     }
 
     private void destroyWorker() {
@@ -156,17 +176,34 @@ public class Worker {
         log.info("[{}] Worker destroyed", address);
     }
 
-    private void processCommand(CMD command, ZFrame payload) {
+    private void processCommand(CMD command, ZMsg message) {
 
         switch (command) {
 
             case REQUEST:
-                log.trace("[{}] - {}", command, payload.toString());
-                // process request
+
+                ZFrame senderAddress = message.pop();
+
+                BatchRequest<T> requests = BatchRequest.fromMsg(serializer, message);
+
+                for (T payload : requests)
+                    processor.apply(payload);
+
+                ////////////////////////////////////////////////////
+                message.destroy();
+
+                ZMsg response = requests.toMsg(serializer, CMD.WORKER, CMD.REPLY, "normalize", senderAddress);
+                log.trace("[{}] OUTPUT {} - {}", address, command, ZHelper.dump(response, log.isTraceEnabled()));
+
+                response.send(socket);
+
+                if(replyNo++ % 1000 == 0)
+                    log.trace("[{}] Send reply no {}", address, replyNo++);
+
                 break;
 
             case HEARTBEAT:
-                log.info("[{}] Received heartbeat from endpoint", address);
+                log.debug("[{}] Received heartbeat from endpoint", address);
                 // Good to know!
                 // The message received was considered a beat
                 break;
@@ -179,5 +216,16 @@ public class Worker {
             default:
                 log.warn("[{}] Invalid command {}", address, command.name());
         }
+    }
+
+    public void start() {
+        log.info("[{}] Worker started", address);
+        reconnectToEndpoint();
+        receiveIndefinitely();
+    }
+
+    public void terminate() {
+        continueRunning = false;
+        log.info("Worker termination requested");
     }
 }

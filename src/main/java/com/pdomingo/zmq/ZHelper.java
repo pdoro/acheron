@@ -1,5 +1,6 @@
 package com.pdomingo.zmq;
 
+import org.apache.logging.log4j.util.Strings;
 import org.zeromq.ZFrame;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.Context;
@@ -11,6 +12,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
+/**
+ *
+ */
 public class ZHelper {
     private static Random rand = new Random(System.currentTimeMillis());
 
@@ -37,19 +41,12 @@ public class ZHelper {
         }
     }
 
-    public static String dump(ZMsg msg) {
-        if (msg == null)
-            return "Null message";
-
-        int idx = 0;
-        StringBuilder sb = new StringBuilder();
-        sb.append("\n[----------------- MESSAGE DUMP -----------------]\n");
-        for (ZFrame frame : msg)
-            sb.append(String.format("[Frame %02d - %03d bytes] %s\n", idx++, frame.size(), frame.toString()));
-        sb.append("[------------------------------------------------]");
-        return sb.toString();
-    }
-
+    /**
+     *
+     * @param frame
+     * @param strings
+     * @return
+     */
     public static ZMsg frames(ZFrame frame, String... strings) {
         ZMsg msg = new ZMsg();
         for (String str : strings)
@@ -59,11 +56,27 @@ public class ZHelper {
         return msg;
     }
 
+    /**
+     *
+     * @param sock
+     */
     public static void setId(Socket sock) {
-        String identity = String.format("%04X-%04X", rand.nextInt(), rand.nextInt());
-        sock.setIdentity(identity.getBytes(ZMQ.CHARSET));
+        sock.setIdentity(randomId().getBytes(ZMQ.CHARSET));
     }
 
+    /**
+     *
+     * @return
+     */
+    public static String randomId() {
+        return String.format("%04X-%04X", rand.nextInt(), rand.nextInt());
+    }
+
+    /**
+     *
+     * @param ctx
+     * @return
+     */
     public static List<Socket> buildZPipe(Context ctx) {
         Socket socket1 = ctx.socket(ZMQ.PAIR);
         socket1.setLinger(0);
@@ -78,5 +91,28 @@ public class ZHelper {
         socket2.connect(iface);
 
         return Arrays.asList(socket1, socket2);
+    }
+
+    /**
+     *
+     * @param msg
+     * @param traceIsEnabled
+     * @return
+     */
+    public static String dump(ZMsg msg, boolean traceIsEnabled) {
+
+        if (msg == null)
+            return "Null message";
+
+        if(!traceIsEnabled) // avoid heavy tracing calls
+            return Strings.EMPTY;
+
+        int idx = 0;
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n[----------------- MESSAGE DUMP -----------------]\n");
+        for (ZFrame frame : msg)
+            sb.append(String.format("[Frame %02d - %03d bytes] %s\n", idx++, frame.size(), frame.toString()));
+        sb.append("[------------------------------------------------]");
+        return sb.toString();
     }
 }

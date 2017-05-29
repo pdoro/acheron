@@ -34,7 +34,7 @@
         </Console>
 
         <RollingRandomAccessFile name="FileLog"
-                                 fileName="${logDir}/${LogFile}.log"
+                                 fileName="${logDir}/${logFile}.log"
                                  filePattern="${logDir}/$${date:yyyy-MM}/%date{yyyy-MM-dd}--%i.log.gz"
                                  immediateFlush="false">
             <PatternLayout pattern="${infoPattern}" header="${logHeader}${logSeparator}"
@@ -62,14 +62,21 @@
 
     <Loggers>
         <!-- External events such as library logs -->
-        <Root level="info">
+        <Root level="trace">
             <AppenderRef ref="AsyncFileLog" />
             <AppenderRef ref="AsyncConsole" />
         </Root>
         <!-- Dual log from  package events -->
-        <Logger name="com." level="info" additivity="false">
+        <Logger name="com.pdomingo.broker" level="info" additivity="false">
             <AppenderRef ref="AsyncConsole" />
-            <AppenderRef ref="AsyncFileLog"/>
+        </Logger>
+
+        <Logger name="com.pdomingo.client" level="info" additivity="false">
+            <AppenderRef ref="AsyncConsole" />
+        </Logger>
+
+        <Logger name="com.pdomingo.worker" level="info" additivity="false">
+            <AppenderRef ref="AsyncConsole" />
         </Logger>
     </Loggers>
 </Configuration>

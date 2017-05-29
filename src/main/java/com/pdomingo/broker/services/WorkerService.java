@@ -1,13 +1,9 @@
 package com.pdomingo.broker.services;
 
-import org.zeromq.ZFrame;
-import org.zeromq.ZMsg;
-
-import java.util.Queue;
-
 import com.pdomingo.broker.Broker;
 import com.pdomingo.broker.Broker.VWorker;
 import com.pdomingo.zmq.CMD;
+import com.pdomingo.zmq.MsgBuilder;
 import com.pdomingo.zmq.ZHelper;
 import lombok.extern.slf4j.Slf4j;
 import org.zeromq.ZFrame;
@@ -17,27 +13,27 @@ import org.zeromq.ZMsg;
 import java.util.*;
 
 /**
- * WorkerService
- * @author pdomingo
+ *
  */
 @Slf4j
 public class WorkerService implements Service {
 
     private final String serviceName;
     private Queue<VWorker> availableWorkers;
+    private Map<String, VWorker> busyWorkers;
     private Map<String, VWorker> workerSet;
 
     public WorkerService(String serviceName) {
         this.serviceName = serviceName;
-        availableWorkers = new LinkedList<>();
-        workerSet = new HashMap<>();
+        this.availableWorkers = new LinkedList<>();
+        this.busyWorkers = new HashMap<>();
+        this.workerSet = new HashMap<>();
     }
 
     @Override
     public void handle(ZFrame requester, ZMsg payload, Broker brokerContext) {
 
-        if(log.isTraceEnabled())
-            log.trace("Received message from {}: {}", requester.toString(), ZHelper.dump(payload));
+        log.trace("Received message from {}: {}", requester.toString(), ZHelper.dump(payload, log.isTraceEnabled()));
 
         ZFrame header = payload.pop();
 
@@ -59,16 +55,34 @@ public class WorkerService implements Service {
         if(command == CMD.REQUEST) {
             log.trace("Received request from {}", sender.toString());
 
-            if(availableWorkers.isEmpty()) {
-                // No hay workers disponibles
-                // En un futuro, mandar la peticiÃƒÂ³n a otro broker que tenga
-                // workers disponibles para trabajar
-                // Ã‚Â¿Y si el broker no dispone de ese servicio?
-            } else {
-                VWorker freeWorker = availableWorkers.poll();
+			/*
+			if(availableWorkers.isEmpty()) {
+
+				sender.destroy();
+				payload.destroy();
+				log.warn("No available workers");
+
+				// No hay workers disponibles
+				// En un futuro, mandar la petición a otro broker que tenga
+				// workers disponibles para trabajar
+				// ¿Y si el broker no dispone de ese servicio?
+			} else {
+			*/
+
+            VWorker freeWorker = availableWorkers.poll();
+            if(freeWorker.alive) {
+                log.debug("Worker '{}' selected to interceptWrite request", freeWorker.address);
                 ZMsg msg = freeWorker.buildRequest(sender, payload);
+
+                log.trace("[{}] Sending message to worker {}", brokerContext.address, ZHelper.dump(msg, log.isTraceEnabled()));
                 brokerContext.send(msg);
+                availableWorkers.offer(freeWorker);
             }
+            else {
+                ;// TODO: manejar un worker que ha sido invalidado nivel de broker por HB fallido
+            }
+            //busyWorkers.put(freeWorker.address, freeWorker);
+
         }
         else
             log.warn("Invalid command {}. Discarding message", command.name());
@@ -109,13 +123,18 @@ public class WorkerService implements Service {
 
             case REPLY:
 
-                ZFrame client = msg.unwrap();               // ----------------------- //
-                msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR)); // | 0  - EMPTY_STRING   | //
-                msg.add(client);                            // | 1  - Client address | //
-                msg.add(CMD.CLIENT.newFrame());             // | 2  - CMD.CLIENT     | //
-                //msg.add(worker.service);                  // | 3+ - Payload        | //
-                // Revisar				                    // ----------------------- //
-                brokerContext.send(msg);
+                ZMsg reply = MsgBuilder.start()      // -----------------------
+                        .add(msg.pop())              // | 1  - Client address |
+                        .add(ZMQ.MESSAGE_SEPARATOR)  // | 0  - EMPTY_STRING   |
+                        .add(msg)                    // | 3+ - Payload        |
+                        .build();                    // -----------------------
+
+                log.trace("[{}] Sending reply to client {}", brokerContext.address, ZHelper.dump(reply, log.isTraceEnabled()));
+
+                brokerContext.send(reply);
+
+                //VWorker freeWorker = busyWorkers.remove(address);
+                //availableWorkers.add(freeWorker);
                 break;
 
             case DISCONNECT:

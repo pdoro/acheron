@@ -1,15 +1,12 @@
 package com.pdomingo.zmq;
 
 import lombok.extern.slf4j.Slf4j;
-import org.zeromq.ZMQ;
 import org.zeromq.ZFrame;
+import org.zeromq.ZMQ;
 import org.zeromq.ZMsg;
 
 import java.util.Date;
 
-/**
- *
- */
 @Slf4j
 public class Heartbeat {
 
@@ -79,7 +76,7 @@ public class Heartbeat {
 
     public static final int MAX_LIVENESS = 3;
     public static final int MAX_RECONNECT_DELAY = 32000; // in msecs
-    public static final int HEARTBEAT_INTERVAL = 5000;   // in msecs
+    public static final int HEARTBEAT_INTERVAL = 7000;   // in msecs
 
     private int         liveness; // remaining attempts to decide if other end is dead
     private long  reconnectDelay = 1000; // in msecs

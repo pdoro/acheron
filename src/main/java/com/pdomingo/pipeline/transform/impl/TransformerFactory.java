@@ -49,7 +49,7 @@ public class TransformerFactory<T, U> {
     /**
      * Compone dos transformadores de tipos compatibles en un unico transformados
      * La idea es componer:
-     * A -> B && B -> C ==> A -> C
+     * A to B && B to C == A to C
      *
      * @param t1 transformador A -> B
      * @param t2 transformador B -> C
