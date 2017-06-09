@@ -22,6 +22,7 @@ public class WorkerService implements Service {
     private Queue<VWorker> availableWorkers;
     private Map<String, VWorker> busyWorkers;
     private Map<String, VWorker> workerSet;
+    private TaskDistributionStrategy taskDistributionStrategy;
 
     public WorkerService(String serviceName) {
         this.serviceName = serviceName;
@@ -70,7 +71,7 @@ public class WorkerService implements Service {
 			*/
 
             VWorker freeWorker = availableWorkers.poll();
-            if(freeWorker.alive) {
+            if(freeWorker.alive) { // TODO solucionar posible NPException
                 log.debug("Worker '{}' selected to interceptWrite request", freeWorker.address);
                 ZMsg msg = freeWorker.buildRequest(sender, payload);
 

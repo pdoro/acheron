@@ -62,7 +62,7 @@
 
     <Loggers>
         <!-- External events such as library logs -->
-        <Root level="trace">
+        <Root level="info">
             <AppenderRef ref="AsyncFileLog" />
             <AppenderRef ref="AsyncConsole" />
         </Root>

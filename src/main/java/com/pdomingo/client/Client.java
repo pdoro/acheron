@@ -60,7 +60,7 @@ public class Client<T> implements Closeable {
 
     private final String address;
     private final String endpoint;
-    private String requestedService = "normalize";
+    private String requestedService;
     private final BiTransformer<T, byte[]> serializer;
     private final ResponseHandler<T> asyncHandler;
 
@@ -82,9 +82,10 @@ public class Client<T> implements Closeable {
         retries = builder.retries;
         serializer = builder.serializer;
         asyncHandler = builder.handler;
-        address = "Client01";//ZHelper.randomId();
+        address = ZHelper.randomId();
+        requestedService = builder.service;
 
-        currentBatch = new BatchRequest<>(1, batchSize);
+        currentBatch = BatchRequest.firstBatch(batchSize);
         reorderBuffer = new ReorderBuffer<>(writeBurst);
 
         reconnectToEndpoint();
@@ -124,8 +125,6 @@ public class Client<T> implements Closeable {
 
         log.debug("Starting response gathering");
 
-        long timeout = 100;
-
         // Dont stop gathering responses until we received ALL!
         while (reorderBuffer.hasPendingRequests()) {
 
@@ -153,7 +152,7 @@ public class Client<T> implements Closeable {
                 Collection<BatchRequest<T>> pendingRequests = reorderBuffer.getPendingRequests();
                 log.debug("Pending requests : {}", pendingRequests.size());
                 for (BatchRequest timeoutReq : pendingRequests) {
-                    if (timeoutReq.getRetries() < 1000) { // Cambiar a 0
+                    if (timeoutReq.getRetries() < retries) {
                         timeoutReq.failRequest();
                         timeoutReq.toMsg(serializer, CMD.CLIENT, CMD.REQUEST, requestedService, null).send(socket);
                     } else
@@ -175,7 +174,7 @@ public class Client<T> implements Closeable {
 
             reorderBuffer.pending(currentBatch);
             writtenRequests += 1;
-            currentBatch = new BatchRequest<>(currentBatch.batchNo + 1, batchSize);
+            currentBatch = BatchRequest.nextBatch(currentBatch);
         }
     }
 
@@ -219,6 +218,7 @@ public class Client<T> implements Closeable {
         private int writeBurst = 5000; // messages until readFrom wait
         private int timeout = 2500; // msecs
         private int retries = 3;
+        private String service;
         private BiTransformer<T, byte[]> serializer;
         private ResponseHandler<T> handler;
 
@@ -258,6 +258,11 @@ public class Client<T> implements Closeable {
 
         public Builder<T> retries(int retries) {
             this.retries = retries;
+            return this;
+        }
+
+        public Builder<T> forService(String service) {
+            this.service = service;
             return this;
         }
 

@@ -127,8 +127,9 @@ public class AcheronTest {
                             log.error("Response@Client: {}", response);
                         }
                     })
-                    .retries(5)
+                    .retries(50)
                     .timeout(1000)
+                    .forService("process")
                     .build();
 
 
@@ -150,7 +151,7 @@ public class AcheronTest {
 
         @Override
         public void run() {
-            Worker<DummyObj> worker = new Worker<>(BROKER_ENDPOINT, new DummyObjSerializer(), new Function<DummyObj, DummyObj>() {
+            Worker<DummyObj> worker = new Worker<>(BROKER_ENDPOINT, "process", new DummyObjSerializer(), new Function<DummyObj, DummyObj>() {
                 @Override
                 public DummyObj apply(DummyObj dummyObj) {
                     log.error("Request@Worker: {}", dummyObj);

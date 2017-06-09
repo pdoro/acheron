@@ -21,7 +21,7 @@ public class Worker<T> {
     private ZPoller poller;
 
     private String endpoint;
-    private final String service = "normalize";
+    private final String service;
     private final String address;
 
     private Heartbeat heart; // broker's heartbeat communication
@@ -33,8 +33,9 @@ public class Worker<T> {
 
 	/*--------------------------- Constructor ---------------------------*/
 
-    public Worker(String endpoint, BiTransformer<T, byte[]> serializer, Function<T, T> processor) {
+    public Worker(String endpoint, String service, BiTransformer<T, byte[]> serializer, Function<T, T> processor) {
         this.endpoint = endpoint;
+        this.service = service;
         this.address = ZHelper.randomId();
         this.ctx = new ZContext();
         this.heart = new Heartbeat();

@@ -10,16 +10,16 @@ import java.util.Arrays;
  */
 public enum CMD {
 
-    CLIENT(1),
-    WORKER(2),
+    CLIENT,
+    WORKER,
 
-    READY(3),
-    HEARTBEAT(3),
-    REQUEST(4),
-    REPLY(5),
-    DISCONNECT(6),
+    READY,
+    HEARTBEAT,
+    REQUEST,
+    REPLY,
+    DISCONNECT,
 
-    INVALID(7);
+    INVALID;
 
     private final byte[] data;
 
@@ -27,19 +27,19 @@ public enum CMD {
         this.data = value.getBytes(ZMQ.CHARSET);
     }
 
-    CMD(int value) { //watch for ints > 255, will be truncated
-        byte b = (byte) (value & 0xFF);
+    CMD() { //watch for ints > 255, will be truncated
+        byte b = (byte) (ordinal() & 0xFF);
         this.data = new byte[] { b };
     }
 
     public ZFrame newFrame () {
-        return new ZFrame(this.name());
-        //return new ZFrame(data);
+        //return new ZFrame(this.name()); // debug purposes
+        return new ZFrame(data);
     }
 
     public boolean frameEquals (ZFrame frame) {
-        return Arrays.equals(name().getBytes(), frame.getData());
-        //return Arrays.equals(data, frame.getData());
+        //return Arrays.equals(name().getBytes(), frame.getData()); // debug purposes
+        return Arrays.equals(data, frame.getData());
     }
 
     public static CMD resolveCommand(ZFrame frame) {

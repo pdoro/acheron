@@ -46,23 +46,25 @@ public class BatchRequest<T> implements Iterable<T> {
 
     @Builder
     public BatchRequest(long batchNo, int batchSize) {
-        this.batchSize = batchSize;
-        this.batchNo = batchNo;
-        this.batchId = UUID.randomUUID().toString();
-        this.requests = new ArrayList<>(batchSize);
-
-        this.retries = 0;
-        this.forceReady = false;
+        this(UUID.randomUUID().toString(), batchNo, batchSize);
     }
 
     @Builder
-    public BatchRequest(String batchId, long batchNo,int batchSize) {
+    public BatchRequest(String batchId, long batchNo, int batchSize) {
         this.batchSize = batchSize;
         this.batchNo = batchNo;
         this.batchId = batchId;
         this.requests = new ArrayList<>(batchSize);
         this.retries = 0;
         this.forceReady = false;
+    }
+
+    public static <T> BatchRequest<T> firstBatch(int batchSize) {
+        return new BatchRequest<>(1, batchSize);
+    }
+
+    public static <T> BatchRequest<T> nextBatch(BatchRequest<T> previousBatch) {
+        return new BatchRequest<>(previousBatch.batchNo + 1, previousBatch.batchSize);
     }
 
     public boolean isReady() {
