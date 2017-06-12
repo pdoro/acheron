@@ -1,11 +1,8 @@
 package com.pdomingo.client;
 
-import com.pdomingo.pipeline.transform.BiTransformer;
-import com.pdomingo.pipeline.transform.Transformer;
+import com.pdomingo.pipeline.transform.Serializer;
 import com.pdomingo.zmq.CMD;
 import com.esotericsoftware.kryo.Kryo;
-import com.esotericsoftware.kryo.io.Input;
-import com.esotericsoftware.kryo.io.Output;
 import com.google.common.primitives.Longs;
 import com.pdomingo.zmq.MsgBuilder;
 import lombok.Builder;
@@ -26,8 +23,8 @@ import java.util.UUID;
  * rendimiento envitando round-trips por mensajes unitarios.
  *
  * Esta clase permite transformarse en un {@link ZMsg} a traves del metodo
- * {@link #toMsg(Kryo, CMD, CMD, String, ZFrame)} y volver a transformarse
- * en destino mediante {@link #fromMsg(Kryo, ZMsg)}.
+ * {@link #toMsg(Serializer, CMD, CMD, String, ZFrame)} y volver a transformarse
+ * en destino mediante {@link #fromMsg(Serializer, ZMsg)}.
  *
  * Para poder de/serializar los objetos de tipo {@link T}, debe proporcionarse
  * un serializador de kryo a los metodos que permiten transformarse en mensaje
@@ -35,13 +32,19 @@ import java.util.UUID;
 @Data
 public class BatchRequest<T> implements Iterable<T> {
 
+    /* Sequence number of the batch request */
     public final long batchNo;
+    /* Batch identifier */
     public String batchId;
+    /* Number of elements in the batch request */
     public final int batchSize;
 
+    /* Requests carried in the batch */
     private List<T> requests;
 
+    /* Number of time that batch failed and resent */
     private int retries;
+    /* Flag to force the batch suitable to be sent */
     private boolean forceReady;
 
     @Builder
@@ -80,7 +83,7 @@ public class BatchRequest<T> implements Iterable<T> {
             requests.add(req);
     }
 
-    public ZMsg toMsg(BiTransformer<T, byte[]> serializer, CMD requester, CMD msgType, String requestedService, ZFrame clientAddress) {
+    public ZMsg toMsg(Serializer<T> serializer, CMD requester, CMD msgType, String requestedService, ZFrame clientAddress) {
 
         MsgBuilder msgBuilder = MsgBuilder.start()
                 .add(ZMQ.MESSAGE_SEPARATOR) // Frame 0 - empty (REQ compatibility) //
@@ -96,21 +99,21 @@ public class BatchRequest<T> implements Iterable<T> {
                 .add(Longs.toByteArray(batchNo));
 
         for(T req : requests) {
-            msgBuilder.add(serializer.forwardTransform(req));                     // Frame 3 - Request payload //
+            msgBuilder.add(serializer.write(req));                     // Frame 3 - Request payload //
         }
 
         return msgBuilder.build();
     }
 
     @SuppressWarnings("unchecked")
-    public static <T> BatchRequest<T> fromMsg(BiTransformer<T, byte[]> deserializer, ZMsg msg) {
+    public static <T> BatchRequest<T> fromMsg(Serializer<T> serializer, ZMsg msg) {
 
         String batchId = msg.popString();
         long batchNo = Longs.fromByteArray(msg.pop().getData());
         BatchRequest<T> batchRequest = new BatchRequest<>(batchId, batchNo, msg.size());
 
         for (ZFrame frame : msg) {
-            T deserializedFrame = deserializer.backwardTransform(frame.getData());
+            T deserializedFrame = serializer.read(frame.getData());
             batchRequest.addReq(deserializedFrame);
         }
 

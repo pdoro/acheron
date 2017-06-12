@@ -1,7 +1,7 @@
 package com.pdomingo.client;
 
 import com.google.common.base.Charsets;
-import com.pdomingo.pipeline.transform.BiTransformer;
+import com.pdomingo.pipeline.transform.Serializer;
 import com.pdomingo.zmq.CMD;
 import com.pdomingo.zmq.ZHelper;
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +36,7 @@ import java.util.Collection;
  *     un mensaje</li>
  * </ul>
  *
- * @param <T>
+ * @param <T> type
  */
 @Slf4j
 public class Client<T> implements Closeable {
@@ -47,29 +47,39 @@ public class Client<T> implements Closeable {
     private ZMQ.Socket socket;
     private ZPoller poller;
 
-    // Timeout until request retry
+    /* Timeout until request retry */
     private final int timeout; // msecs
-    // Max number of request until the client gives up
+    /* Max number of request until the client gives up */
     private int retries;
-    // Type of communication between client and service
+    /* Type of communication between client and service */
     private final boolean async;
-    // Number of messages per batch. Non applicable for sync
+    /* Number of messages per batch. Non applicable for sync */
     private final int batchSize;
-    // Messages to write until we await for responses
+    /* Messages to write until we await for responses */
     private final int writeBurst;
-
-    private final String address;
+    /* Identity used by the client to identify in message headers */
+    private final String identity;
+    /* Endpoint to whom the client will connect */
     private final String endpoint;
-    private String requestedService;
-    private final BiTransformer<T, byte[]> serializer;
+    /* Service that this client will demand to the endpoint*/
+    private final String requestedService;
+    /* Bidirectional tranformer */
+    private final Serializer<T> serializer;
+    /* User provided handler for responses */
     private final ResponseHandler<T> asyncHandler;
 
     private int writtenRequests;
     private BatchRequest<T> currentBatch;
+
+    /* Buffer used to gather out of order responses */
     private ReorderBuffer<T> reorderBuffer;
 
     /*--------------------------- Constructor ---------------------------*/
 
+    /**
+     * Constructs a new semi-immutable Client
+     * @param builder
+     */
     private Client(Builder<T> builder) {
 
         ctx = new ZContext();
@@ -82,7 +92,7 @@ public class Client<T> implements Closeable {
         retries = builder.retries;
         serializer = builder.serializer;
         asyncHandler = builder.handler;
-        address = ZHelper.randomId();
+        identity = ZHelper.randomId();
         requestedService = builder.service;
 
         currentBatch = BatchRequest.firstBatch(batchSize);
@@ -95,6 +105,13 @@ public class Client<T> implements Closeable {
 
     /*--------------------------- Private methods ---------------------------*/
 
+    /**
+     * Reconnects the client to {@code endpoint} setting the socket
+     * identity as {@code identity}
+     *
+     * If the client was already connected, the socket is destroyed
+     * and created again
+     */
     private void reconnectToEndpoint() {
         log.trace("Attempting to reconnect broker");
 
@@ -105,7 +122,7 @@ public class Client<T> implements Closeable {
 
         int socketType = ZMQ.DEALER;
         socket = ctx.createSocket(socketType);
-        socket.setIdentity(address.getBytes(Charsets.UTF_8));
+        socket.setIdentity(identity.getBytes(Charsets.UTF_8));
         socket.connect(endpoint);
 
         poller = new ZPoller(ctx.createSelector());
@@ -121,6 +138,19 @@ public class Client<T> implements Closeable {
             gatherResponses();
     }
 
+    /**
+     * This method is called when the client has sent all it's
+     * requests and starts to gather pending requests. This
+     * logic is intentional in order to avoid overflow the
+     * system with messages.
+     *
+     * This method won't return until all pending responses
+     * registered in the reordering buffer has been received
+     *
+     * If the client didn't received any response in {@code timeout}
+     * miliseconds, it will start to check if any request has
+     * timeout and resend that request at max {@code retries} times
+     */
     private void gatherResponses() {
 
         log.debug("Starting response gathering");
@@ -134,7 +164,7 @@ public class Client<T> implements Closeable {
             if (poller.isReadable(socket)) {
 
                 ZMsg response = ZMsg.recvMsg(socket);
-                log.trace("[{}] Received message from broker {}", address, ZHelper.dump(response, log.isTraceEnabled()));
+                log.trace("[{}] Received message from broker {}", identity, ZHelper.dump(response, log.isTraceEnabled()));
 
                 response.pop(); // EMPTY SEPARATOR
 
@@ -151,7 +181,7 @@ public class Client<T> implements Closeable {
 
                 Collection<BatchRequest<T>> pendingRequests = reorderBuffer.getPendingRequests();
                 log.debug("Pending requests : {}", pendingRequests.size());
-                for (BatchRequest timeoutReq : pendingRequests) {
+                for (BatchRequest<T> timeoutReq : pendingRequests) {
                     if (timeoutReq.getRetries() < retries) {
                         timeoutReq.failRequest();
                         timeoutReq.toMsg(serializer, CMD.CLIENT, CMD.REQUEST, requestedService, null).send(socket);
@@ -169,7 +199,7 @@ public class Client<T> implements Closeable {
 
         if (currentBatch.isReady()) {
             ZMsg msg = currentBatch.toMsg(serializer, CMD.CLIENT, CMD.REQUEST, requestedService, null);
-            log.trace("[{}] Sending message {}", address, ZHelper.dump(msg, log.isTraceEnabled()));
+            log.trace("[{}] Sending message {}", identity, ZHelper.dump(msg, log.isTraceEnabled()));
             msg.send(socket); // Send the batch message
 
             reorderBuffer.pending(currentBatch);
@@ -186,7 +216,7 @@ public class Client<T> implements Closeable {
      * 3000 registros, el cliente se quedarÃ¡ esperando los 2000 registros
      * faltantes.
      * <p>
-     * Este mÃ©todo permite forzar el envÃ­o y posterior recepciÃ³n de esas X
+     * Este metodo permite forzar el envio y posterior recepcion de esas X
      * peticiones cuando X es menor que la cantidad de mensajes esperados
      */
     public void flush() {
@@ -219,7 +249,7 @@ public class Client<T> implements Closeable {
         private int timeout = 2500; // msecs
         private int retries = 3;
         private String service;
-        private BiTransformer<T, byte[]> serializer;
+        private Serializer<T> serializer;
         private ResponseHandler<T> handler;
 
         public static <T> Builder<T> start() {
@@ -231,7 +261,7 @@ public class Client<T> implements Closeable {
             return this;
         }
 
-        public Builder<T> serializeUsing(BiTransformer<T, byte[]> serializer) {
+        public Builder<T> serializeUsing(Serializer<T> serializer) {
             this.serializer = serializer;
             return this;
         }

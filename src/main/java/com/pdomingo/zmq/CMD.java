@@ -22,6 +22,7 @@ public enum CMD {
     INVALID;
 
     private final byte[] data;
+    private static final CMD[] values = values(); // cache
 
     CMD(String value) {
         this.data = value.getBytes(ZMQ.CHARSET);
@@ -43,7 +44,7 @@ public enum CMD {
     }
 
     public static CMD resolveCommand(ZFrame frame) {
-        for(CMD command : CMD.values())
+        for(CMD command : values)
             if(command.frameEquals(frame))
                 return command;
 

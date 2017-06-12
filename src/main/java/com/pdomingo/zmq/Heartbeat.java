@@ -7,6 +7,11 @@ import org.zeromq.ZMsg;
 
 import java.util.Date;
 
+/**
+ *
+ *
+ *
+ */
 @Slf4j
 public class Heartbeat {
 
@@ -43,7 +48,7 @@ public class Heartbeat {
         return diff > 0 ? diff : 0; // Avoid negative diff so poll doesn't wait infinitely
     }
 
-    public ZMsg beatToEndpoint(String address) {
+    public ZMsg beatToEndpointAt(String address) {
         ZMsg msg = new ZMsg();
         msg.add(address);
         msg.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
@@ -52,10 +57,10 @@ public class Heartbeat {
         return msg;
     }
 
-    public ZMsg beatToEndpoint() {
+    public ZMsg beatToEndpoint(String service) {
         ZMsg beat = new ZMsg();
         beat.add(new ZFrame(ZMQ.MESSAGE_SEPARATOR));
-        beat.add("normalize");
+        beat.add(service);
         beat.add(CMD.WORKER.newFrame());
         beat.add(CMD.HEARTBEAT.newFrame());
         updateSelfBeat();

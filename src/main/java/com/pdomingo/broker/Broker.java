@@ -22,19 +22,19 @@ public class Broker {
 
 	private final ZContext ctx;
 	private ZMQ.Socket socket;
+
+	/* */
 	public final String address;
+	/* */
 	private final Heartbeat brokerHeart;
 
+	/* */
 	private Map<String, Service> services;
+
+	/* */
 	private Map<String, VWorker> workers;
 
 	private boolean shutdownRequested;
-
-	/*
-	private static final MetricRegistry metrics = new MetricRegistry();
-	private final Timer requests = metrics.timer(MetricRegistry.name(Broker.class, "requests"));
-	*/
-
 	private static final String INTERNAL_SERVICE_PREFIX = "mmi.";
 
 	@Data
@@ -161,7 +161,7 @@ public class Broker {
 
 		for(VWorker worker : workers.values()) {
 			if (worker.heart.isTimeToBeat()) {
-				ZMsg msg = worker.heart.beatToEndpoint(worker.address);
+				ZMsg msg = worker.heart.beatToEndpointAt(worker.address);
 				log.trace("[{}] â¤ Sent heartbeat to worker {} {}", address, worker.address, ZHelper.dump(msg, log.isTraceEnabled()));
 				msg.send(socket); // falta la direccion de envio!
 				notifiedWorkers++;

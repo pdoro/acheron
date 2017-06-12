@@ -63,12 +63,20 @@
 
     <Loggers>
         <!-- External events such as library logs -->
-        <Root level="trace">
-            <!-- <AppenderRef ref="AsyncFileLog" /> -->
+        <Root level="info">
+            <AppenderRef ref="AsyncFileLog" />
             <AppenderRef ref="AsyncConsole" />
         </Root>
         <!-- Dual log from  package events -->
-        <Logger name="com.pdomingo" level="trace" additivity="false">
+        <Logger name="com.pdomingo.broker" level="info" additivity="false">
+            <AppenderRef ref="AsyncConsole" />
+        </Logger>
+
+        <Logger name="com.pdomingo.client" level="info" additivity="false">
+            <AppenderRef ref="AsyncConsole" />
+        </Logger>
+
+        <Logger name="com.pdomingo.worker" level="info" additivity="false">
             <AppenderRef ref="AsyncConsole" />
         </Logger>
     </Loggers>

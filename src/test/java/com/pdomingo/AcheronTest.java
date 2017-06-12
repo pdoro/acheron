@@ -1,23 +1,17 @@
 package com.pdomingo;
 
 import com.esotericsoftware.kryo.Kryo;
-import com.esotericsoftware.kryo.Serializer;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
-import com.esotericsoftware.kryo.serializers.MapSerializer;
 import com.pdomingo.broker.Broker;
 import com.pdomingo.client.Client;
-import com.pdomingo.pipeline.transform.BiTransformer;
-import com.pdomingo.pipeline.transform.Transformer;
+import com.pdomingo.pipeline.transform.Serializer;
 import com.pdomingo.worker.Worker;
 import lombok.AllArgsConstructor;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
-
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import static org.junit.Assert.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -30,73 +24,15 @@ import java.util.function.Function;
 public class AcheronTest {
 
     private static final String BROKER_ENDPOINT = "tcp://localhost:8765";
+    private final ExecutorService threadPool = Executors.newCachedThreadPool();
 
-    @AllArgsConstructor
-    @ToString
-    public static class DummyObj {
-        int id;
-        String text;
-        Map<String, Status> statusMap;
+    public static final String RESPONSE_HEADER = "OK-";
+    public static final String REQUEST_HEADER = "Test-";
 
-        enum Status {
-            OK, ERROR;
-        }
-    }
+    @Test
+    public void asyncTest() throws InterruptedException {
 
-    public static class DummyObjSerializer
-            extends Serializer<DummyObj>
-            implements BiTransformer<DummyObj, byte[]> {
-
-        private final Kryo kryo = new Kryo();
-        private Output output = new Output(1024);
-        private MapSerializer mapSerializer;
-
-        public DummyObjSerializer() {
-            mapSerializer = new MapSerializer();
-            mapSerializer.setKeyClass(String.class, kryo.getSerializer(String.class));
-            mapSerializer.setKeysCanBeNull(true);
-            mapSerializer.setValueClass(DummyObj.Status.class, kryo.getSerializer(DummyObj.Status.class));
-        }
-
-        @Override
-        public byte[] forwardTransform(DummyObj dummyObj) {
-            write(kryo, output, dummyObj);
-            byte[] byteArray = output.toBytes();
-            output.clear();
-            return byteArray;
-        }
-
-        @Override
-        public DummyObj backwardTransform(byte[] bytes) {
-            return read(kryo, new Input(bytes), DummyObj.class);
-        }
-
-        @Override
-        public void write(Kryo kryo, Output output, DummyObj dummyObj) {
-            output.writeInt(dummyObj.id);
-            output.writeString(dummyObj.text);
-            kryo.writeObject(output, dummyObj.statusMap, mapSerializer);
-        }
-
-        @Override
-        public DummyObj read(Kryo kryo, Input input, Class<DummyObj> aClass) {
-
-            int id = input.readInt();
-            String text = input.readString();
-            Map<String, DummyObj.Status> statusMap = kryo.readObject(input, HashMap.class, mapSerializer);
-
-            return new DummyObj(id, text, statusMap);
-        }
-    }
-
-    private static ExecutorService threadPool = Executors.newCachedThreadPool();
-
-
-    //@Test
-    //public void fullTest() throws InterruptedException {
-    public static void main(String[] args) throws InterruptedException {
-
-        threadPool.submit(new ClientRunnable());
+        threadPool.submit(new ClientRunnable(true));
 
         threadPool.submit(new WorkerRunnable());
         threadPool.submit(new WorkerRunnable());
@@ -107,16 +43,79 @@ public class AcheronTest {
 
         threadPool.shutdown();
         threadPool.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
+    }
 
+
+    @Test
+    public void syncTest() throws InterruptedException {
+
+        threadPool.submit(new ClientRunnable(false));
+
+        threadPool.submit(new WorkerRunnable());
+        threadPool.submit(new WorkerRunnable());
+        threadPool.submit(new WorkerRunnable());
+        threadPool.submit(new WorkerRunnable());
+
+        threadPool.submit(new BrokerRunnable());
+
+        threadPool.shutdown();
+        threadPool.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
+    }
+
+    @AllArgsConstructor
+    @ToString
+    public static class DummyObj {
+        int id;
+        String text;
+    }
+
+    public static class DummyObjSerializer
+            extends com.esotericsoftware.kryo.Serializer<DummyObj>
+            implements Serializer<DummyObj> {
+
+        private final Kryo kryo = new Kryo();
+        private Output output = new Output(1024);
+
+        @Override
+        public void write(Kryo kryo, Output output, DummyObj dummyObj) {
+            output.writeInt(dummyObj.id);
+            output.writeString(dummyObj.text);
+        }
+
+        @Override
+        public DummyObj read(Kryo kryo, Input input, Class<DummyObj> aClass) {
+
+            int id = input.readInt();
+            String text = input.readString();
+
+            return new DummyObj(id, text);
+        }
+
+        @Override
+        public byte[] write(DummyObj dummyObj) {
+            Output output = new Output(1024);
+            write(kryo, output, dummyObj);
+            return output.toBytes();
+        }
+
+        @Override
+        public DummyObj read(byte[] bytes) {
+            return read(kryo, new Input(bytes), DummyObj.class);
+        }
     }
 
     public static class ClientRunnable implements Runnable {
 
+        private boolean async;
+
+        public ClientRunnable(boolean async) {
+            this.async = async;
+        }
+
         @Override
         public void run() {
-            try {
             Client<DummyObj> client = Client.Builder.<DummyObj>start()
-                    .async(true)
+                    .async(async)
                     .batchSize(1000)
                     .writeBurst(50)
                     .connectTo(BROKER_ENDPOINT)
@@ -124,6 +123,7 @@ public class AcheronTest {
                     .responseHandler(new Client.ResponseHandler<DummyObj>() {
                         @Override
                         public void handle(DummyObj response) {
+                            assertEquals(response.text, RESPONSE_HEADER + response.id);
                             log.error("Response@Client: {}", response);
                         }
                     })
@@ -134,16 +134,12 @@ public class AcheronTest {
 
 
                 for (int idx = 0; idx < 5_000_000; idx++) {
-                    client.send(new DummyObj(idx, "Test_" + idx, Collections.emptyMap()));
+                    client.send(new DummyObj(idx, REQUEST_HEADER + idx));
                 }
 
 
             client.flush();
             client.close();
-
-            } catch (RuntimeException re) {
-                log.error("Fatal error",re);
-            }
         }
     }
 
@@ -151,18 +147,21 @@ public class AcheronTest {
 
         @Override
         public void run() {
-            Worker<DummyObj> worker = new Worker<>(BROKER_ENDPOINT, "process", new DummyObjSerializer(), new Function<DummyObj, DummyObj>() {
-                @Override
-                public DummyObj apply(DummyObj dummyObj) {
-                    log.error("Request@Worker: {}", dummyObj);
-                    return dummyObj;
-                }
-            });
-            try {
+            Worker<DummyObj> worker = Worker.Builder.<DummyObj>start()
+                .connectTo(BROKER_ENDPOINT)
+                .forService("process")
+                .serializeUsing(new DummyObjSerializer())
+                .useFunction(new Function<DummyObj, DummyObj>() {
+                    @Override
+                    public DummyObj apply(DummyObj dummyObj) {
+                        assertEquals(dummyObj.text, REQUEST_HEADER + dummyObj.id);
+                        log.error("Request@Worker: {}", dummyObj);
+                        dummyObj.text = RESPONSE_HEADER + dummyObj.id;
+                        return dummyObj;
+                    }
+                }).build();
+
             worker.start();
-            } catch (RuntimeException re) {
-                log.error("Fatal error",re);
-            }
         }
     }
 
@@ -171,11 +170,7 @@ public class AcheronTest {
         @Override
         public void run() {
             Broker broker = new Broker(BROKER_ENDPOINT);
-            try {
-                broker.start();
-            } catch (RuntimeException re) {
-                log.error("Fatal error",re);
-            }
+            broker.start();
         }
     }
 }

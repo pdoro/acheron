@@ -19,10 +19,12 @@ import java.util.*;
 public class WorkerService implements Service {
 
     private final String serviceName;
+
     private Queue<VWorker> availableWorkers;
     private Map<String, VWorker> busyWorkers;
     private Map<String, VWorker> workerSet;
-    private TaskDistributionStrategy taskDistributionStrategy;
+
+    private TaskDistributionStrategy distributionStrategy;
 
     public WorkerService(String serviceName) {
         this.serviceName = serviceName;

@@ -1,16 +1,35 @@
 package com.pdomingo.worker;
 
 import com.pdomingo.client.BatchRequest;
-import com.pdomingo.pipeline.transform.BiTransformer;
+import com.pdomingo.pipeline.transform.Serializer;
 import com.pdomingo.zmq.CMD;
 import com.pdomingo.zmq.Heartbeat;
 import com.pdomingo.zmq.ZHelper;
 import org.zeromq.ZFrame;
 import org.zeromq.*;
 import lombok.extern.slf4j.Slf4j;
-
 import java.util.function.Function;
 
+/**
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ * @param <T> type
+ */
 @Slf4j
 public class Worker<T> {
 
@@ -28,19 +47,19 @@ public class Worker<T> {
     private boolean continueRunning;
 
     private int replyNo = 0;
-    private final BiTransformer<T, byte[]> serializer;
+    private final Serializer<T> serializer;
     private final Function<T,T> processor;
 
 	/*--------------------------- Constructor ---------------------------*/
 
-    public Worker(String endpoint, String service, BiTransformer<T, byte[]> serializer, Function<T, T> processor) {
-        this.endpoint = endpoint;
-        this.service = service;
-        this.address = ZHelper.randomId();
+    public Worker(Builder<T> builder) {
+        this.endpoint = builder.endpoint;
+        this.service = builder.service;
+        this.address = builder.address;
         this.ctx = new ZContext();
         this.heart = new Heartbeat();
-        this.serializer = serializer;
-        this.processor = processor;
+        this.serializer = builder.serializer;
+        this.processor = builder.processor;
         this.continueRunning = true;
     }
 
@@ -140,7 +159,7 @@ public class Worker<T> {
             }
 
             if (heart.isTimeToBeat()) {
-                heart.beatToEndpoint().send(socket);
+                heart.beatToEndpoint(service).send(socket);
                 log.debug("[{}] Sent heartbeat to endpoint {}", address, endpoint);
             }
         }
@@ -162,7 +181,7 @@ public class Worker<T> {
         heart.beatFromEndpoint(); // use received message as a signal of alive endpoint
 
         // Don't try to handle errors, just assert noisily
-        assert (msg.size() >= 3); // TODO modificar por log y continue
+        assert (msg.size() >= 2); // TODO modificar por log y continue
         ZFrame empty = msg.pop();
         assert (empty.getData().length == 0); // TODO modificar por log y continue
         empty.destroy();
@@ -193,7 +212,7 @@ public class Worker<T> {
                 ////////////////////////////////////////////////////
                 message.destroy();
 
-                ZMsg response = requests.toMsg(serializer, CMD.WORKER, CMD.REPLY, "normalize", senderAddress);
+                ZMsg response = requests.toMsg(serializer, CMD.WORKER, CMD.REPLY, service, senderAddress);
                 log.trace("[{}] OUTPUT {} - {}", address, command, ZHelper.dump(response, log.isTraceEnabled()));
 
                 response.send(socket);
@@ -228,5 +247,49 @@ public class Worker<T> {
     public void terminate() {
         continueRunning = false;
         log.info("Worker termination requested");
+    }
+
+    /* -------------------------------------------------------------------------- */
+
+    public static class Builder<T> {
+
+        private String endpoint;
+        private String service;
+        private String address = ZHelper.randomId();
+        private Serializer<T> serializer;
+        private Function<T,T> processor;
+
+        public static <T> Builder<T> start() {
+            return new Builder<>();
+        }
+
+        public Builder<T> connectTo(String endpoint) {
+            this.endpoint = endpoint;
+            return this;
+        }
+
+        public Builder<T> address(String address) {
+            this.address = address;
+            return this;
+        }
+
+        public Builder<T> serializeUsing(Serializer<T> serializer) {
+            this.serializer = serializer;
+            return this;
+        }
+
+        public Builder<T> forService(String service) {
+            this.service = service;
+            return this;
+        }
+
+        public Builder<T> useFunction(Function<T,T> processor) {
+            this.processor = processor;
+            return this;
+        }
+
+        public Worker<T> build() {
+            return new Worker<>(this);
+        }
     }
 }
